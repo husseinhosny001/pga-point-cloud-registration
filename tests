@@ -1,0 +1,119 @@
+tests/test_motor.cpp
+#include <gtest/gtest.h>
+#include "pga/motor.hpp"
+#include <cmath>
+
+constexpr double EPSILON = 1e-9;
+
+// ============================================================================
+// 1. Identity & Initialization Tests
+// ============================================================================
+TEST(PGAMotorTest, DefaultConstructorIsIdentity) {
+    pga::Motor m;
+    // Default motor should be pure identity: scalar=1, all bivectors=0
+    EXPECT_NEAR(m.p[0], 1.0, EPSILON);
+    for (int i = 1; i < 8; ++i) {
+        EXPECT_NEAR(m.p[i], 0.0, EPSILON);
+    }
+}
+
+TEST(PGAMotorTest, IdentityTransformsPointUnchanged) {
+    pga::Motor identity;
+    auto [x, y, z] = identity.TransformPoint(3.5, -2.1, 7.8);
+    EXPECT_NEAR(x, 3.5, EPSILON);
+    EXPECT_NEAR(y, -2.1, EPSILON);
+    EXPECT_NEAR(z, 7.8, EPSILON);
+}
+
+// ============================================================================
+// 2. Pure Translation Tests
+// ============================================================================
+TEST(PGAMotorTest, PureTranslationPointTransformation) {
+    double tx = 2.5, ty = -4.0, tz = 1.2;
+    pga::Motor t_motor = pga::Motor::Translation(tx, ty, tz);
+
+    auto [x, y, z] = t_motor.TransformPoint(1.0, 1.0, 1.0);
+    EXPECT_NEAR(x, 1.0 + tx, EPSILON);
+    EXPECT_NEAR(y, 1.0 + ty, EPSILON);
+    EXPECT_NEAR(z, 1.0 + tz, EPSILON);
+}
+
+TEST(PGAMotorTest, PureTranslationDoesNotAffectVectorOrNormal) {
+    pga::Motor t_motor = pga::Motor::Translation(10.0, -20.0, 30.0);
+    
+    // Pure vectors/normals should remain invariant under translation
+    auto [nx, ny, nz] = t_motor.TransformVector(0.0, 1.0, 0.0);
+    EXPECT_NEAR(nx, 0.0, EPSILON);
+    EXPECT_NEAR(ny, 1.0, EPSILON);
+    EXPECT_NEAR(nz, 0.0, EPSILON);
+}
+
+// ============================================================================
+// 3. Pure Rotation Tests
+// ============================================================================
+TEST(PGAMotorTest, PureRotation90DegreesZAxis) {
+    const double M_PI_VAL = 3.14159265358979323846;
+    double angle = M_PI_VAL / 2.0; // 90 degrees around Z axis
+    pga::Motor r_motor = pga::Motor::Rotation(angle, 0.0, 0.0, 1.0);
+
+    // Rotating point (1, 0, 0) by 90 deg around Z gives (0, 1, 0)
+    auto [x, y, z] = r_motor.TransformPoint(1.0, 0.0, 0.0);
+    EXPECT_NEAR(x, 0.0, 1e-6);
+    EXPECT_NEAR(y, 1.0, 1e-6);
+    EXPECT_NEAR(z, 0.0, 1e-6);
+}
+
+TEST(PGAMotorTest, RotationPreservesVectorNorm) {
+    pga::Motor r_motor = pga::Motor::Rotation(1.234, 0.6, 0.8, 0.0);
+    auto [nx, ny, nz] = r_motor.TransformVector(3.0, 4.0, 12.0);
+
+    double original_norm = std::sqrt(3.0*3.0 + 4.0*4.0 + 12.0*12.0); // = 13
+    double transformed_norm = std::sqrt(nx*nx + ny*ny + nz*nz);
+    
+    EXPECT_NEAR(transformed_norm, original_norm, EPSILON);
+}
+
+// ============================================================================
+// 4. SE(3) Motor Composition & Reversal (~M)
+// ============================================================================
+TEST(PGAMotorTest, MotorCompositionAndReversalInvariance) {
+    pga::Motor R = pga::Motor::Rotation(0.5, 1.0, 0.0, 0.0);
+    pga::Motor T = pga::Motor::Translation(3.0, -1.0, 2.0);
+    
+    // M = T * R
+    pga::Motor M = T * R;
+    pga::Motor M_inv = M.Reverse();
+
+    // M * ~M should yield Identity
+    pga::Motor identity = M * M_inv;
+    identity.Normalize();
+
+    EXPECT_NEAR(identity.p[0], 1.0, 1e-6);
+    EXPECT_NEAR(identity.p[1], 0.0, 1e-6);
+    EXPECT_NEAR(identity.p[2], 0.0, 1e-6);
+    EXPECT_NEAR(identity.p[3], 0.0, 1e-6);
+}
+
+// ============================================================================
+// 5. Exponential Map (se(3) -> SE(3)) Tests
+// ============================================================================
+TEST(PGAMotorTest, ExpMapPureTranslation) {
+    // Tangent vector xi = [0, 0, 0, vx, vy, vz]
+    std::array<double, 6> xi = {0.0, 0.0, 0.0, 2.0, -4.0, 6.0};
+    pga::Motor m = pga::Motor::Exp(xi);
+
+    auto [x, y, z] = m.TransformPoint(0.0, 0.0, 0.0);
+    EXPECT_NEAR(x, 2.0, 1e-6);
+    EXPECT_NEAR(y, -4.0, 1e-6);
+    EXPECT_NEAR(z, 6.0, 1e-6);
+}
+
+TEST(PGAMotorTest, ExpMapNearZeroRotationStability) {
+    // Test Taylor expansion stability near zero angle
+    std::array<double, 6> xi = {1e-10, 1e-10, 1e-10, 0.1, 0.2, 0.3};
+    EXPECT_NO_THROW({
+        pga::Motor m = pga::Motor::Exp(xi);
+        m.Normalize();
+        EXPECT_NEAR(m.p[0], 1.0, EPSILON);
+    });
+}
